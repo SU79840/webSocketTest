@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <mutex>
 
 #ifndef _SOCKET_T_DEFINED
 typedef int socket_t;
@@ -126,6 +127,8 @@ namespace { // private module-only namespace
         std::vector<uint8_t> txbuf;
         std::vector<uint8_t> receivedData;
 
+        std::mutex bufMutex;
+
         socket_t sockfd;
         readyStateValues readyState;
         bool useMask;
@@ -176,6 +179,8 @@ namespace { // private module-only namespace
                     rxbuf.resize(N + ret);
                 }
             }
+
+            std::lock_guard<std::mutex> guard(bufMutex);
             while (txbuf.size()) {
                 int ret = ::send(sockfd, (char *) &txbuf[0], txbuf.size(), 0);
                 if (false) {} // ??
@@ -220,6 +225,7 @@ namespace { // private module-only namespace
 
         virtual void _dispatchBinary(BytesCallback_Imp &callable) {
             // TODO: consider acquiring a lock on rxbuf...
+            //std::lock_guard<std::mutex> guard(bufMutex);
             while (true) {
                 wsheader_type ws;
                 if (rxbuf.size() < 2) { return; /* Need at least 2 */ }
@@ -309,7 +315,7 @@ namespace { // private module-only namespace
 
         void send(const char *message) {
             std::string message_tmp = std::string(message);
-            sendData(wsheader_type::TEXT_FRAME, sizeof(message), message_tmp.begin(), message_tmp.end());
+            sendData(wsheader_type::TEXT_FRAME, message_tmp.size(), message_tmp.begin(), message_tmp.end());
         }
 
         void sendBinary(const std::string &message) {
@@ -370,6 +376,7 @@ namespace { // private module-only namespace
                 }
             }
             // N.B. - txbuf will keep growing until it can be transmitted over the socket:
+            std::lock_guard<std::mutex> guard(bufMutex);
             txbuf.insert(txbuf.end(), header.begin(), header.end());
             txbuf.insert(txbuf.end(), message_begin, message_end);
             if (useMask) {
@@ -385,6 +392,7 @@ namespace { // private module-only namespace
             readyState = readyStateValues::CLOSING;
             uint8_t closeFrame[6] = {0x88, 0x80, 0x00, 0x00, 0x00, 0x00}; // last 4 bytes are a masking key
             std::vector<uint8_t> header(closeFrame, closeFrame + 6);
+            std::lock_guard<std::mutex> guard(bufMutex);
             txbuf.insert(txbuf.end(), header.begin(), header.end());
         }
 
